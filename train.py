@@ -1,14 +1,13 @@
-# train.py
-
 import torch
 import torch.nn.functional as F
 from torch.optim import Adam
 from torch.nn import BCEWithLogitsLoss
 from torch_geometric.utils import negative_sampling
+from tqdm import tqdm
 
 from config import (
     DEVICE, EPOCHS, LEARNING_RATE,
-    NEG_SAMPLING_METHOD, EMBED_DIM, 
+    NEG_SAMPLING_METHOD, EMBED_DIM,
     HIDDEN_DIM, ROC_PATH
 )
 from data_utils import load_and_split_edges
@@ -52,9 +51,12 @@ def main():
     optimizer = Adam(model.parameters(), lr=LEARNING_RATE)
     criterion = BCEWithLogitsLoss()
 
-    for epoch in range(1, EPOCHS + 1):
+    for epoch in tqdm(range(1, EPOCHS + 1), desc="Epoch"):
         loss = train(model, data, optimizer, criterion)
         train_losses.append(loss)
+
+        tqdm.write(f"► Epoch {epoch}/{EPOCHS} — Loss: {loss:.4f}")
+
         if epoch % 5 == 0 or epoch == EPOCHS:
             metrics = compute_metrics(model, data, test_edges, NEG_SAMPLING_METHOD, DEVICE)
             print(f"[{epoch:03d}] Loss: {loss:.4f} | AUC: {metrics['auc_roc']:.4f} | AP: {metrics['avg_prec']:.4f} | F1: {metrics['f1']:.4f}")
@@ -65,8 +67,8 @@ def main():
         metrics=metrics,
         fpr=fpr,
         tpr=tpr,
-        roc_save_filename=ROC_PATH,         
-        train_loss_history=train_losses 
+        roc_save_filename=ROC_PATH,
+        train_loss_history=train_losses
     )
 
 if __name__ == "__main__":
