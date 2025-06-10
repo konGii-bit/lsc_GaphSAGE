@@ -2,59 +2,81 @@ import torch
 import torch.nn.functional as F
 from torch.optim import Adam
 from torch.nn import BCEWithLogitsLoss
+from torch_geometric.loader import LinkNeighborLoader
 from torch_geometric.utils import negative_sampling
 from tqdm import tqdm
 
 from config import (
     DEVICE, EPOCHS, LEARNING_RATE,
     NEG_SAMPLING_METHOD, EMBED_DIM,
-    HIDDEN_DIM, ROC_PATH
+    HIDDEN_DIM, ROC_PATH, BATCH_SIZE,
+    NUM_NEIGHBORS
 )
 from data_utils import load_and_split_edges
 from model import GraphSAGE
 from evaluate import compute_metrics, log_results
 
-def train(model, data, optimizer, criterion):
+def train(model, loader, optimizer, criterion):
     model.train()
-    optimizer.zero_grad()
+    total_loss = 0
+    total_samples = 0
+    for batch in loader:
+        batch = batch.to(DEVICE)
+        optimizer.zero_grad()
 
-    pos_edge_index = data.edge_index
-    num_pos_edges = pos_edge_index.size(1)
+        # Positive edges and labels from loader
+        pos_edge_index = batch.edge_label_index
+        num_pos = pos_edge_index.size(1)
 
-    neg_edge_index = negative_sampling(
-        edge_index=pos_edge_index,
-        num_nodes=data.num_nodes,
-        num_neg_samples=num_pos_edges,
-        method=NEG_SAMPLING_METHOD
-    )
+        # Negative sampling within the batch
+        neg_edge_index = negative_sampling(
+            edge_index=batch.edge_index,
+            num_nodes=batch.num_nodes,
+            num_neg_samples=num_pos,
+            method=NEG_SAMPLING_METHOD
+        )
 
-    edge_index = torch.cat([pos_edge_index, neg_edge_index], dim=1)
-    labels = torch.cat([
-        torch.ones(num_pos_edges),
-        torch.zeros(num_pos_edges)
-    ]).to(DEVICE)
+        # Combine positive and negative edges and labels
+        edge_index = torch.cat([pos_edge_index, neg_edge_index], dim=1)
+        labels = torch.cat([
+            torch.ones(num_pos, device=DEVICE),
+            torch.zeros(num_pos, device=DEVICE)
+        ])
 
-    predictions = model(data.edge_index, edge_index)
-    loss = criterion(predictions, labels)
-    loss.backward()
-    optimizer.step()
+        # Forward pass
+        pred = model(batch.x, edge_index)
+        loss = criterion(pred, labels)
+        loss.backward()
+        optimizer.step()
 
-    return loss.item()
+        total_loss += loss.item() * labels.size(0)
+        total_samples += labels.size(0)
+
+    return total_loss / total_samples
+
 
 def main():
-
     data, test_edges, num_nodes = load_and_split_edges()
     data = data.to(DEVICE)
-    train_losses = []
 
     model = GraphSAGE(num_nodes=num_nodes, embed_dim=EMBED_DIM, hidden_dim=HIDDEN_DIM).to(DEVICE)
     optimizer = Adam(model.parameters(), lr=LEARNING_RATE)
     criterion = BCEWithLogitsLoss()
 
-    for epoch in tqdm(range(1, EPOCHS + 1), desc="Epoch"):
-        loss = train(model, data, optimizer, criterion)
-        train_losses.append(loss)
+    # Prepare LinkNeighborLoader for batching
+    loader = LinkNeighborLoader(
+        data,
+        num_neighbors=[NUM_NEIGHBORS] * 2,
+        batch_size=BATCH_SIZE,
+        edge_label_index=data.edge_index,
+        shuffle=True
+    )
 
+
+    train_losses = []
+    for epoch in tqdm(range(1, EPOCHS + 1), desc="Epoch"):
+        loss = train(model, loader, optimizer, criterion)
+        train_losses.append(loss)
         tqdm.write(f"► Epoch {epoch}/{EPOCHS} — Loss: {loss:.4f}")
 
         if epoch % 5 == 0 or epoch == EPOCHS:
@@ -70,6 +92,7 @@ def main():
         roc_save_filename=ROC_PATH,
         train_loss_history=train_losses
     )
+
 
 if __name__ == "__main__":
     main()
