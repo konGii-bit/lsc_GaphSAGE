@@ -46,8 +46,6 @@ protein1 protein2 combined_score
 ```bash
 python train.py
 ```
-scp -r plgmeling@athena.cyfronet.pl:/net/tscratch/people/plgmeling/lsc_GaphSAGE/runs /c/Users/Ja/Desktop/lsc/lsc_GaphSAGE
-scp -r plgmeling@athena.cyfronet.pl:/runs /c/Users/Ja/Desktop/lsc/lsc_GaphSAGE
 
 ---
 
