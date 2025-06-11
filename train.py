@@ -10,7 +10,7 @@ from config import (
     DEVICE, EPOCHS, LEARNING_RATE,
     NEG_SAMPLING_METHOD, EMBED_DIM,
     HIDDEN_DIM, ROC_PATH, BATCH_SIZE,
-    NUM_NEIGHBORS
+    NUM_NEIGHBORS, DROPOUT
 )
 from data_utils import load_and_split_edges
 from model import GraphSAGE
@@ -59,7 +59,7 @@ def main():
     data, test_edges, num_nodes = load_and_split_edges()
     data = data.to(DEVICE)
 
-    model = GraphSAGE(num_nodes=num_nodes, embed_dim=EMBED_DIM, hidden_dim=HIDDEN_DIM).to(DEVICE)
+    model = GraphSAGE(num_nodes=num_nodes, embed_dim=EMBED_DIM, hidden_dim=HIDDEN_DIM, dropout=DROPOUT).to(DEVICE)
     optimizer = Adam(model.parameters(), lr=LEARNING_RATE)
     criterion = BCEWithLogitsLoss()
 

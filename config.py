@@ -1,7 +1,7 @@
 import os
 
 # ---------- Paths ----------
-DATA_PATH = 'interactions_modified1.csv'
+DATA_PATH = 'methanobacterium_cleaned.txt'
 RESULTS_DIR = 'results'
 TB_LOG_DIR = 'runs'
 ROC_PATH = None
@@ -22,3 +22,4 @@ TEST_SPLIT = 0.2
 RANDOM_SEED = 42
 BATCH_SIZE = 4
 NUM_NEIGHBORS  = 8
+DROPOUT = 0.3
