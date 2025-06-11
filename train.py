@@ -44,7 +44,7 @@ def train(model, loader, optimizer, criterion):
         ])
 
         # Forward pass
-        pred = model(batch.x, edge_index)
+        pred = model(batch.edge_index, edge_index)
         loss = criterion(pred, labels)
         loss.backward()
         optimizer.step()
@@ -58,6 +58,7 @@ def train(model, loader, optimizer, criterion):
 def main():
     data, test_edges, num_nodes = load_and_split_edges()
     data = data.to(DEVICE)
+    print(DEVICE)
 
     model = GraphSAGE(num_nodes=num_nodes, embed_dim=EMBED_DIM, hidden_dim=HIDDEN_DIM).to(DEVICE)
     optimizer = Adam(model.parameters(), lr=LEARNING_RATE)
