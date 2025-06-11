@@ -1,75 +1,82 @@
 import torch
-import torch.nn.functional as F
+from torch_geometric.loader import LinkNeighborLoader
 from torch.optim import Adam
 from torch.nn import BCEWithLogitsLoss
-from torch_geometric.utils import negative_sampling
 from tqdm import tqdm
 
 from config import (
     DEVICE, EPOCHS, LEARNING_RATE,
-    NEG_SAMPLING_METHOD, EMBED_DIM,
-    HIDDEN_DIM, ROC_PATH
+    NEG_SAMPLING_RATIO, EMBED_DIM,
+    HIDDEN_DIM, BATCH_SIZE
 )
-from data_utils import load_and_split_edges
+from data_utils import load_data
 from model import GraphSAGE
-from evaluate import compute_metrics, log_results
+from evaluate import evaluate, log_results
 
-def train(model, data, optimizer, criterion):
-    model.train()
-    optimizer.zero_grad()
+def epoch_loss(model, loader, optimizer=None, criterion=None, desc=None):
+    is_train = optimizer is not None
+    if is_train:
+        model.train()
+    else:
+        model.eval()
+    total_loss = 0
+    progress = tqdm(loader, desc=desc)
+    with torch.set_grad_enabled(is_train):
+        for batch in progress:
+            edge_label_index = batch.edge_label_index.to(DEVICE)
+            labels = batch.edge_label.to(DEVICE).float()
+            out = model(batch.edge_index.to(DEVICE), edge_label_index)
+            loss = criterion(out, labels)
+            if is_train:
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+            total_loss += loss.item()
+            progress.set_postfix({'loss': f'{loss.item():.4f}'})
+    return total_loss / len(loader)
 
-    pos_edge_index = data.edge_index
-    num_pos_edges = pos_edge_index.size(1)
-
-    neg_edge_index = negative_sampling(
-        edge_index=pos_edge_index,
-        num_nodes=data.num_nodes,
-        num_neg_samples=num_pos_edges,
-        method=NEG_SAMPLING_METHOD
-    )
-
-    edge_index = torch.cat([pos_edge_index, neg_edge_index], dim=1)
-    labels = torch.cat([
-        torch.ones(num_pos_edges),
-        torch.zeros(num_pos_edges)
-    ]).to(DEVICE)
-
-    predictions = model(data.edge_index, edge_index)
-    loss = criterion(predictions, labels)
-    loss.backward()
-    optimizer.step()
-
-    return loss.item()
 
 def main():
+    data, train_eidx, val_eidx, test_edges, num_nodes = load_data()
+    # Loaders
+    train_loader = LinkNeighborLoader(
+        data,
+        num_neighbors=[10,10],
+        batch_size=BATCH_SIZE,
+        edge_label_index=train_eidx,
+        edge_label=torch.ones(train_eidx.size(1), dtype=torch.long),
+        neg_sampling_ratio=NEG_SAMPLING_RATIO,
+        shuffle=True
+    )
+    val_loader = LinkNeighborLoader(
+        data,
+        num_neighbors=[10,10],
+        batch_size=BATCH_SIZE,
+        edge_label_index=val_eidx,
+        edge_label=torch.ones(val_eidx.size(1), dtype=torch.long),
+        neg_sampling_ratio=NEG_SAMPLING_RATIO,
+        shuffle=False
+    )
 
-    data, test_edges, num_nodes = load_and_split_edges()
-    data = data.to(DEVICE)
-    train_losses = []
-
-    model = GraphSAGE(num_nodes=num_nodes, embed_dim=EMBED_DIM, hidden_dim=HIDDEN_DIM).to(DEVICE)
+    model = GraphSAGE(num_nodes, EMBED_DIM, HIDDEN_DIM).to(DEVICE)
     optimizer = Adam(model.parameters(), lr=LEARNING_RATE)
     criterion = BCEWithLogitsLoss()
+    train_losses, val_losses = [], []
 
-    for epoch in tqdm(range(1, EPOCHS + 1), desc="Epoch"):
-        loss = train(model, data, optimizer, criterion)
-        train_losses.append(loss)
+    # Training loop with tqdm
+    for epoch in range(1, EPOCHS+1):
+        t_desc = f"Train Epoch {epoch}/{EPOCHS}"
+        v_desc = f"Val   Epoch {epoch}/{EPOCHS}"
+        t_loss = epoch_loss(model, train_loader, optimizer, criterion, desc=t_desc)
+        v_loss = epoch_loss(model, val_loader, None, criterion, desc=v_desc)
+        train_losses.append(t_loss)
+        val_losses.append(v_loss)
 
-        tqdm.write(f"► Epoch {epoch}/{EPOCHS} — Loss: {loss:.4f}")
-
-        if epoch % 5 == 0 or epoch == EPOCHS:
-            metrics = compute_metrics(model, data, test_edges, NEG_SAMPLING_METHOD, DEVICE)
-            print(f"[{epoch:03d}] Loss: {loss:.4f} | AUC: {metrics['auc_roc']:.4f} | AP: {metrics['avg_prec']:.4f} | F1: {metrics['f1']:.4f}")
-
-    fpr, tpr = metrics['fpr'], metrics['tpr']
-    log_results(
-        model_name="GraphSAGE",
-        metrics=metrics,
-        fpr=fpr,
-        tpr=tpr,
-        roc_save_filename=ROC_PATH,
-        train_loss_history=train_losses
-    )
+    # Final evaluation
+    metrics = evaluate(model, data, test_edges, DEVICE)
+    print(f"Test AUC: {metrics['auc_roc']:.4f}, AP: {metrics['avg_prec']:.4f}, F1: {metrics['f1']:.4f}")
+    log_results("GraphSAGE_Batched", metrics, fpr=metrics['fpr'], tpr=metrics['tpr'],
+                train_losses=train_losses, val_losses=val_losses)
 
 if __name__ == "__main__":
     main()

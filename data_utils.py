@@ -3,15 +3,9 @@ import numpy as np
 import torch
 from torch_geometric.data import Data
 from sklearn.model_selection import train_test_split
-from config import DATA_PATH, TEST_SPLIT, RANDOM_SEED
+from config import DATA_PATH, TEST_SPLIT, RANDOM_SEED, VALID_SPLIT
 
-def load_and_split_edges():
-    """
-    Loads a CSV file, filters and maps proteins to indices, 
-    and splits the list of edges into training and testing sets.
-    Returns a tuple: (Data for training, test_pos_edges_numpy, number of nodes).
-    """
-    # 1) Load data
+def load_data():
     df = pd.read_csv(
         DATA_PATH,
         sep=r'\s+',
@@ -19,36 +13,31 @@ def load_and_split_edges():
         dtype={'protein1': str, 'protein2': str, 'combined_score': str},
         engine='python'
     )
-    # 2) Filter out invalid/short scores and convert to float
     df = df[pd.to_numeric(df['combined_score'], errors='coerce').notnull()]
-    df['combined_score'] = df['combined_score'].astype(float)
+    df = df[['protein1', 'protein2']]
 
-    # 3) Map protein → numeric index
-    genes = pd.unique(df[['protein1', 'protein2']].values.ravel())
+    genes = pd.unique(df.values.ravel())
     mapping = {g: i for i, g in enumerate(genes)}
-
     u = df['protein1'].map(mapping).to_numpy()
     v = df['protein2'].map(mapping).to_numpy()
 
-    # 4) Train/test split
-    all_idx = np.arange(len(u))
-    train_idx, test_idx = train_test_split(
-        all_idx, test_size=TEST_SPLIT, random_state=RANDOM_SEED
-    )
-    u_train, v_train = u[train_idx], v[train_idx]
-    u_test, v_test   = u[test_idx],   v[test_idx]
+    # split test first
+    idx = np.arange(len(u))
+    train_val_idx, test_idx = train_test_split(idx, test_size=TEST_SPLIT, random_state=RANDOM_SEED)
+    # then split train/val
+    train_idx, val_idx = train_test_split(train_val_idx, test_size=VALID_SPLIT, random_state=RANDOM_SEED)
 
-    # 5) Build symmetric training edges
-    train_edges = np.vstack([u_train, v_train])
-    train_edges = np.concatenate([train_edges, train_edges[::-1]], axis=1)
+    def build_edge_index(indices):
+        uu, vv = u[indices], v[indices]
+        edge = np.vstack([np.concatenate([uu, vv]), np.concatenate([vv, uu])])
+        return torch.tensor(edge, dtype=torch.long)
 
-    # 6) Build symmetric positive test edges
-    test_pos_edges = np.vstack([u_test, v_test])
-    test_pos_edges = np.concatenate([test_pos_edges, test_pos_edges[::-1]], axis=1)
+    train_edge_index = build_edge_index(train_idx)
+    val_edge_index = build_edge_index(val_idx)
+    # full graph for neighbor context: use train + val
+    full_ctx = build_edge_index(np.concatenate([train_idx, val_idx]))
 
     num_nodes = len(genes)
-    # Convert to PyTorch tensor
-    train_edge_index = torch.from_numpy(train_edges.astype(np.int64))
-
-    data = Data(edge_index=train_edge_index, num_nodes=num_nodes)
-    return data, test_pos_edges, num_nodes
+    data = Data(edge_index=full_ctx, num_nodes=num_nodes)
+    test_edges = (u[test_idx], v[test_idx])
+    return data, train_edge_index, val_edge_index, test_edges, num_nodes
